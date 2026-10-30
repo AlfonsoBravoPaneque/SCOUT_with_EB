@@ -27,8 +27,8 @@ extract_parameters <- function(results_list){
         reg <- res$settings[[2]]
         unq_regs <- res$defaults$parsed_alt_tree$unique_regimes
         
-        if (reg == 'BM1'){
-            unq_regs <- unq_regs[-1] # strip off root if BM1. 
+        if (reg %in% c('BM1', 'EB')){
+            unq_regs <- unq_regs[-1] # fixed-root single-theta models
         }
         tt <- unlist(res$paras$theta)
         names(tt) <- paste0('theta_', unq_regs) 
@@ -62,7 +62,7 @@ annotate_history <- function(dataset1, datasetid){
                ungroup() %>% 
         # delta_AIC is kept: SCOUT() selects on delta_AIC == 0 (main.R).
         # OU\\d+ (not OU1) so multi-regime truths like OU4 are labelled, and OU12 is not read as OU1.
-        mutate(truth = str_extract(gene_name, 'BM1|OUM|OU\\d+'))
+        mutate(truth = str_extract(gene_name, 'BM1|EB|OUM|OU\\d+'))
 
     return(dataset2)
 }

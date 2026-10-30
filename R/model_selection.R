@@ -12,10 +12,10 @@
 #
 # Procedure per gene:
 #   1. winner = argmin IC over all candidates (ic = 'AICc' or 'AIC', recomputed from ll/k/n).
-#   2. winner is BM1 or OU1 -> keep it.
-#   3. winner is multi-regime -> LRT winner vs OU1 (mvMORPH convention: larger model is the alt,
+#   2. winner is BM1, OU1 or EB -> keep it (EB is decided by IC only).
+#   3. winner is OU multi-regime -> LRT winner vs OU1 (mvMORPH convention: larger model is the alt,
 #      df = k difference, negative LR clipped to 0). p * n_multi < alpha -> keep winner;
-#      otherwise on_fail = 'fallback' -> IC-best of BM1/OU1, or 'ambiguous' -> labelled ambiguous.
+#      otherwise on_fail = 'fallback' -> IC-best simple model (BM1/OU1/EB), or 'ambiguous'.
 # lrt_status: 'not tested' (BM1 best), 'not eligible' (OU1 best; no valid LRT vs BM1),
 #             'tested: significant' / 'tested: not significant' (multi-regime winner vs OU1).
 # The statistics use SCOUT's unpenalized ll_total at penalized estimates: report as non-standard.
@@ -55,9 +55,12 @@ hybrid_decide <- function(reg, ll, k, n, a) {
   crit <- if (ic == "AIC") -2 * ll + 2 * k else -2 * ll + 2 * k * n / (n - k - 1)
   names(crit) <- names(ll) <- names(k) <- reg
 
-  n_multi <- sum(!reg %in% c(bm, ou))
+  # EB is a simple single-regime alternative, not an OU multi-regime LRT alt.
+  simple_reg <- c(bm, ou, 'EB')
+  n_multi <- sum(!reg %in% simple_reg)
   winner  <- reg[which.min(crit)]
-  simple  <- if (crit[bm] <= crit[ou]) bm else ou
+  simple_crit <- crit[intersect(simple_reg, reg)]
+  simple <- names(simple_crit)[which.min(simple_crit)]
 
   out <- list(
     ic                = ic,
@@ -87,6 +90,11 @@ hybrid_decide <- function(reg, ll, k, n, a) {
     out$lrt_status <- "not eligible"
     out$flag       <- sprintf("%s best by %s; LRT vs %s not valid (not nested under SCOUT's alpha penalty)",
                               ou, ic, bm)
+    return(out)
+  }
+  if (winner == 'EB') {
+    out$lrt_status <- 'not eligible'
+    out$flag <- sprintf('EB best by %s; not an OU multi-regime alternative', ic)
     return(out)
   }
 
@@ -364,6 +372,8 @@ scout_model_selection <- function(history,
   model_all <- as.character(df$model)
   gene_all  <- as.character(df$gene_name)
   alpha_all <- if ("alpha" %in% names(df)) df$alpha else NULL
+  beta_all  <- if ("beta" %in% names(df)) df$beta else NULL
+  betaH_all <- if ("beta_H" %in% names(df)) df$beta_H else NULL
   sigma_all <- if ("sigma" %in% names(df)) df$sigma else NULL
   tau_all   <- if ("tau" %in% names(df)) df$tau else NULL
 
@@ -380,7 +390,8 @@ scout_model_selection <- function(history,
          next_best_regime = NA_character_),
     stats::setNames(list(NA_real_, NA_real_, NA_real_), c(ic_col, w_col, d_col)),
     list(ll_total = ll_all[NA_integer_][1], param.count = k_all[NA_integer_][1],
-         ntips = n_all[NA_integer_][1], alpha = NA_real_, sigma = NA_real_, tau = NA_real_),
+          ntips = n_all[NA_integer_][1], alpha = NA_real_, beta = NA_real_,
+          beta_H = NA_real_, beta_near_bm = NA, sigma = NA_real_, tau = NA_real_),
     stats::setNames(rep(list(NA_real_), length(theta_cols)), theta_cols),
     list(iter = it_all[NA_integer_][1], converge = NA_character_,
          n_candidates_not_converged = NA_integer_),
@@ -427,6 +438,10 @@ scout_model_selection <- function(history,
     row$param.count <- k[i]
     row$ntips       <- n
     row$alpha <- if (mdl == "BM1" || is.null(alpha_all)) NA_real_ else alpha_all[j]
+    row$beta <- if (mdl != 'EB' || is.null(beta_all)) NA_real_ else beta_all[j]
+    row$beta_H <- if (mdl != 'EB' || is.null(betaH_all)) NA_real_ else betaH_all[j]
+    # A 1% maximum change of evolutionary rate across the tree is near BM.
+    row$beta_near_bm <- if (is.na(row$beta_H)) NA else abs(row$beta_H) <= 0.01
     row$sigma <- if (is.null(sigma_all)) NA_real_ else sigma_all[j]
     row$tau   <- if (is.null(tau_all)) NA_real_ else tau_all[j]
     if (length(theta_cols)) {

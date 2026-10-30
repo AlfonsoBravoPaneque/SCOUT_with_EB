@@ -2,7 +2,8 @@
 #' @param counts.file path to a counts file with a columns for species and relevent columns for evolutionary models being tested if an OUX. Other columns will be genes. 
 #' @param tree.file path to newick file. tips match species names in counts.
 #' @param results_dir output directory
-#' @param regimes a list of regimes to test. This include specifying BM1, OU1, and OUx where OUx correspond to columns in the counts file.
+#' @param regimes models to test: BM1, EB, OU1, and OUx partitions. EB uses
+#'   a fixed root and beta <= 0; OUx names must be columns of the counts file.
 #' @param species_key if the species column is not called 'species' (rather cellBC for example), indicate the correct name here. 
 #' @param blacklist genes for testing are inferred automatically. if any columns in the counts file are not for testing and not either the species key or model name, list them here.
 #' @param method one of EM (expectation-maximization), SM (smoothing), MTF (tip fog).
@@ -159,7 +160,7 @@ SCOUT <- function(counts.file, tree.file, results_dir,
 	write.csv(annotated, sprintf('%s/%s_all_genes_full_history.csv', results_dir, tid))
 
 	annotate_history_select <- annotated %>% filter(delta_AIC == 0) %>%
-    dplyr::select(iter, ll_total, sigma, alpha, tau, converge, gene_name, regime, model, param.count, ntips, AIC, AIC_weight)
+    dplyr::select(iter, ll_total, sigma, alpha, beta, beta_H, tau, converge, gene_name, regime, model, param.count, ntips, AIC, AIC_weight)
   names(annotate_history_select)[which(names(annotate_history_select) == 'll_total')] <- 'loglik'
 	write.csv(annotate_history_select, sprintf('%s/%s_annotated_best_fit.csv', results_dir, tid))
 

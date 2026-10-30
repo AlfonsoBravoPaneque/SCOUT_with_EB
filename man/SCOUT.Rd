@@ -42,7 +42,8 @@ SCOUT(
 
 \item{results_dir}{output directory}
 
-\item{regimes}{a list of regimes to test. This include specifying BM1, OU1, and OUx where OUx correspond to columns in the counts file.}
+\item{regimes}{models to test: BM1, EB, OU1, and OUx partitions. EB uses
+a fixed root and beta <= 0; OUx names must be columns of the counts file.}
 
 \item{species_key}{if the species column is not called 'species' (rather cellBC for example), indicate the correct name here.}
 

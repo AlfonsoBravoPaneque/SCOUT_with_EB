@@ -212,7 +212,7 @@ fit_paras <- function(res) {
     paras <- res$paras
     theta <- unlist(paras$theta)
     regs <- as.character(res$defaults$parsed_alt_tree$unique_regimes)
-    if (identical(res$defaults$model, 'BM1')) {
+    if (res$defaults$model %in% c('BM1', 'EB')) {
         regs <- regs[-1]
     }
     if (length(regs) != length(theta)) {
@@ -279,8 +279,10 @@ predict_masked_latent <- function(paras, defaults, held_idx, X_full, kept_idx = 
 
     defaults <- align_regimes(defaults, paras$theta)
 
-    V <- compute_VCV(defaults$parsed_alt_tree, paras$alpha, paras$sigma, add.root = defaults$add.root)
-    W_ <- compute_W_matrix(defaults$parsed_alt_tree, paras$alpha, add.root = defaults$add.root)
+    V <- if (defaults$model == 'EB') compute_VCV_EB(defaults$parsed_alt_tree, paras$beta, paras$sigma) else
+        compute_VCV(defaults$parsed_alt_tree, paras$alpha, paras$sigma, add.root = defaults$add.root)
+    W_ <- if (defaults$model == 'EB') compute_W_EB(defaults$parsed_alt_tree) else
+        compute_W_matrix(defaults$parsed_alt_tree, paras$alpha, add.root = defaults$add.root)
 
     # BM1 with a fixed root carries theta twice, as in e_step.
     if (defaults$add.root == TRUE & defaults$model == 'BM1') {
@@ -694,7 +696,7 @@ runSCOUT.dropout <- function(tree,
             stop('`data` has duplicate species. formatSCOUT uses them as row names.')
         }
         if (is.null(states)) {
-            mcols <- if (is.null(mask_states)) setdiff(regimes, c('BM1', 'OU1')) else mask_states
+            mcols <- if (is.null(mask_states)) setdiff(regimes, c('BM1', 'OU1', 'EB')) else mask_states
             if (length(mcols) == 0) {
                 stop('No regime columns to build mask states from. Set `mask_states` or `states`.')
             }
@@ -998,11 +1000,15 @@ runSCOUT.dropout <- function(tree,
                     param_rows[[length(param_rows) + 1]] <- data.frame(
                         replicate = r, arm = arm, gene = gene, regime = reg, true_model = ref,
                         alpha = res_m$paras$alpha %||% NA_real_,
+                        beta = res_m$paras$beta %||% NA_real_,
+                        beta_H = res_m$final$beta_H %||% NA_real_,
                         sigma = res_m$paras$sigma %||% NA_real_,
                         tau = res_m$paras$tau %||% NA_real_,
                         ll_total = aic_m$ll, param_count = aic_m$k, aic = aic_m$aic, aicc = aic_m$aicc,
                         converge = converge_m, n_kept = n_kept,
                         alpha_full = res_f$paras$alpha %||% NA_real_,
+                        beta_full = res_f$paras$beta %||% NA_real_,
+                        beta_H_full = res_f$final$beta_H %||% NA_real_,
                         sigma_full = res_f$paras$sigma %||% NA_real_,
                         tau_full = res_f$paras$tau %||% NA_real_,
                         stringsAsFactors = FALSE)

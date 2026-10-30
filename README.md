@@ -126,6 +126,7 @@ This returns a list with a dataframe of gene annotations (best fit models) and a
 ### Understanding the Models
 
 - **BM1** (Brownian Motion): Models trait evolution as a random walk with constant variance. Assumes no selection.
+- **EB** (Early Burst): Models a variance rate `sigma * exp(beta * t)`, with `t` measured from the root and `beta <= 0`. The ancestral mean is estimated with a fixed root (as for BM1), even when `fixed_root = FALSE`; positive `beta` would be AC, not EB. Use `regimes = c("BM1", "EB", "OU1", "OUM")` without adding an `EB` column to the counts. `beta_H = beta * H` reports the dimensionless rate change across the tree; `beta_near_bm` flags `abs(beta_H) <= 0.01` without changing model selection. `scale_tree = FALSE` keeps `beta` in the original branch-length units.
 - **OU1** (Single Ornstein-Uhlenbeck): Models evolution toward a single optimum with selection strength α and trait optimum θ.
 - **OUM** (Multiple Optima OU): Models evolution with different trait optima for different regimes (e.g., different cell types or lineages).
 

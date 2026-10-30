@@ -386,6 +386,46 @@ compute_VCV<- function(tree_info, alpha, sigma, add.root=TRUE) {
   return(V)
 }
 
+# EARLY BURST (EB): beta is per unit of branch length. beta * H is
+# dimensionless, so the small-beta limit is stable on trees of any height.
+compute_VCV_EB <- function(tree_info, beta, sigma) {
+  s <- tree_info$shared_lengths
+  H <- max(tree_info$leaf_dists)
+  if (!is.finite(beta) || beta > 0 || !is.finite(sigma) || sigma <= 0 ||
+      !is.finite(H) || H <= 0) stop('EB requires beta <= 0, sigma > 0 and a positive tree height.')
+  V <- if (abs(beta) * H < 1e-8) {
+    # Include the first correction rather than abruptly replacing EB by BM.
+    sigma * s * (1 + beta * s / 2)
+  } else {
+    sigma * expm1(beta * s) / beta
+  }
+  dimnames(V) <- NULL
+  V
+}
+
+# EB's three-point covariance is the BM covariance of this transformed tree.
+# The root has an estimated mean but no extra random-root variance.
+transformPhy_EB <- function(phy, beta, sigma) {
+  phy <- ape::reorder.phylo(phy, 'cladewise')
+  depths <- ape::node.depth.edgelength(phy)
+  a <- depths[phy$edge[, 1]]
+  dt <- phy$edge.length
+  H <- max(depths[seq_along(phy$tip.label)])
+  if (!is.finite(beta) || beta > 0 || !is.finite(sigma) || sigma <= 0 ||
+      !is.finite(H) || H <= 0) stop('EB requires beta <= 0, sigma > 0 and a positive tree height.')
+  phy$edge.length <- if (abs(beta) * H < 1e-8) {
+    sigma * exp(beta * a) * dt * (1 + beta * dt / 2)
+  } else {
+    sigma * exp(beta * a) * expm1(beta * dt) / beta
+  }
+  phy$root.edge <- 0
+  list(tree = phy, diagWeight = stats::setNames(rep(1, length(phy$tip.label)), phy$tip.label))
+}
+
+compute_W_EB <- function(tree_info) {
+  matrix(1, nrow = tree_info$n_leaves, ncol = 1L)
+}
+
 build_regime_paths <- function(tree, node_regimes, root_dists) {
   n_tips <- length(tree$tip.label)
   root <- n_tips + 1
@@ -610,7 +650,7 @@ makeEdges <- function(phy, data, model, k, Tmax_init, int.state, root.age, scale
 
     edges=edges[sort.list(edges[,3]),]
 
-    if (model %in% c('BM1', 'OU1')) {
+    if (model %in% c('BM1', 'OU1', 'EB')) {
         regime <- matrix(0,nrow=length(edges[,1]),ncol=k)
         regime[,1] <- 1
         if (k>1) {
@@ -756,7 +796,10 @@ preprocessTree <- function(inputs, reg,
     data.orig <- inputs$meta_data[, c('species', reg_col, gene_cols)]
     phy <- reorder.phylo(phy, "cladewise")
     
-    if(model == "BM1" & root.fixed == FALSE) { root.fixed = TRUE } # change the argument if BM1. 
+    if(model %in% c('BM1', 'EB') & root.fixed == FALSE) { root.fixed = TRUE } # BM and EB have no stationary root.
+    if (model == 'EB' && (!(algorithm %in% c('three.point', 'inverse')) || weight_type != 'alt')) {
+        stop('EB requires weight_type = "alt" and algorithm = "three.point" or "inverse".')
+    }
     
     data <- data.frame(data.orig[, c(reg_col, gene_cols)], row.names = data.orig[, 'species'])
         
@@ -767,7 +810,7 @@ preprocessTree <- function(inputs, reg,
     Tmax.i <- max(MakeAgeTable(phy, root.age=root.age)) # with root.age == NULL 
 
         #### Establish a bunch of values used later. 
-    if (model %in% c('BM1', 'OU1')){
+    if (model %in% c('BM1', 'OU1', 'EB')){
           #Begins the construction of the edges matrix -- similar to the ouch format##
           #Makes a vector of absolute times in proportion of the total length of the tree
           k <- 1
@@ -881,7 +924,7 @@ preprocessGene <- function(inputs, gene_name, tree_const, root.state, root.fixed
         
         # build theta0 into theta if asking to get root theta. 
 
-        if (model == 'BM1'){
+        if (model %in% c('BM1', 'EB')){
             theta <- c( means.by.reg.init) 
           #  names(theta) <- c('root')
         } else {
@@ -902,7 +945,11 @@ preprocessGene <- function(inputs, gene_name, tree_const, root.state, root.fixed
         tau.i <- 0
     }
 
-    par0 <- list('tau' = tau.i, 'alpha' = alpha.i, 'sigma' = sigma.i, 'theta' = theta) # tau, alpha, sigma2, means.by.regime. 
+    if (model == 'EB') {
+        par0 <- list(tau = tau.i, beta = -1/Tmax, sigma = sigma.i, theta = theta)
+    } else {
+        par0 <- list('tau' = tau.i, 'alpha' = alpha.i, 'sigma' = sigma.i, 'theta' = theta)
+    }
    
     return(list(param_init = par0, X = X))
 
@@ -974,7 +1021,7 @@ formatSCOUT <- function(tree_path, metadata_path, outpath,
         }
     }
 
-    reg_oums <- regimes[! regimes %in% c('BM1', 'OU1')]
+    reg_oums <- regimes[! regimes %in% c('BM1', 'OU1', 'EB')]
     if (length(intersect(reg_oums, colnames(meta))) != length(reg_oums)){
         stop(sprintf('Specified regimes not found in metadata columns: %s. Please correct. Exiting...', paste(reg_oums, collapse=', ')))
     }
@@ -1090,7 +1137,7 @@ formatSCOUT <- function(tree_path, metadata_path, outpath,
     # Kind of convoluted but if there are multiple OUM regimes, need to store a tree for each potential regime. 
     for (r in 1:length(regimes)){
         rname <- regimes[r]
-        if (length(unique(cln_meta[[rname]])) > 1) {
+        if (!rname %in% c('BM1', 'OU1', 'EB') && length(unique(cln_meta[[rname]])) > 1) {
             model <- 'OUM'
             if (anc_infer == 'skip'){
                 phy$node.label <- rep('ANC', phy$Nnode)
@@ -1150,8 +1197,7 @@ runSCOUT<- function(idata,
 
     genes <- idata$gene_cols 
     regimes <- idata$regimes 
-    combos <- expand.grid(genes, regimes)
-    combos <- apply(combos, 2, as.character)
+    combos <- as.matrix(expand.grid(genes, regimes, stringsAsFactors = FALSE))
     colnames(combos) <- c('gene_name', 'regime')#, 'burnin', 'lambda1', 'tau_prior_mean', 'tau_prior_sd', 'lambda2')
     code <- if (is.null(runid)) {paste(sample(c(0:9, letters, LETTERS), 8, replace = TRUE), collapse = "") } else {runid}
 
@@ -1248,8 +1294,7 @@ runSCOUT.batches <- function(idata,
     }
 
     regimes <- idata$regimes 
-    combos <- expand.grid(genes, regimes)
-    combos <- apply(combos, 2, as.character)
+    combos <- as.matrix(expand.grid(genes, regimes, stringsAsFactors = FALSE))
     colnames(combos) <- c('gene_name', 'regime')#, 'burnin', 'lambda1', 'tau_prior_mean', 'tau_prior_sd', 'lambda2')
     code <- if (is.null(runid)) {paste(sample(c(0:9, letters, LETTERS), 8, replace = TRUE), collapse = "") } else {runid}
 
@@ -1312,7 +1357,7 @@ runSCOUT.batches <- function(idata,
           }
           
           # Run EM
-          res1 <- run_em(tree_constants$tree, gene_info$X, gene_info$param_init,
+           res1 <- run_em(tree_constants$tree, gene_info$X, gene_info$param_init,
                          tree_constants$edges, defaults,
                          max_iter = 100,
                          tol_rel = 1e-4,
@@ -1325,7 +1370,7 @@ runSCOUT.batches <- function(idata,
                          save = FALSE,
                          save_pre = NULL,
                          skipE = M_only,
-                         verbose = verbose)
+                          verbose = verbose)
           
           res1$settings <- as.vector(combos[j, ])
           batch_results[[length(batch_results) + 1]] <- res1
@@ -1374,6 +1419,8 @@ combine_disk_batch <- function(results_dir, tid, batch_size=10, tmpdir='./tmp', 
           regime = sapply(batch_results, function(x) x$settings[2]),
           loglik = sapply(batch_results, function(x) x$final$ll_total),
           alpha = sapply(batch_results, function(x) x$final$alpha),
+          beta = sapply(batch_results, function(x) x$final$beta),
+          beta_H = sapply(batch_results, function(x) x$final$beta_H),
           sigma = sapply(batch_results, function(x) x$final$sigma),
           objective = sapply(batch_results, function(x) x$final$objective), 
           tau = sapply(batch_results, function(x) x$final$tau), 
@@ -1400,8 +1447,8 @@ extract_parameters <- function(results_list){
         reg <- res$settings[[2]]
         unq_regs <- res$defaults$parsed_alt_tree$unique_regimes
         
-        if (reg == 'BM1'){
-            unq_regs <- unq_regs[-1] # strip off root if BM1. 
+        if (reg %in% c('BM1', 'EB')){
+            unq_regs <- unq_regs[-1] # BM1 and EB share a fixed-root, single-theta mean.
         }
         tt <- unlist(res$paras$theta)
         names(tt) <- paste0('theta_', unq_regs) 
@@ -1493,7 +1540,7 @@ verify_initial_params <- function(paras, defaults, verbose=TRUE) {
     paras$sigma <- 0.1
   }
   
-  if (paras$alpha < 1e-6 && defaults$model != 'BM1') {
+  if (defaults$model != 'EB' && defaults$model != 'BM1' && paras$alpha < 1e-6) {
     if (verbose) cat("WARNING: Alpha suspiciously small, resetting...\n")
     paras$alpha <- 0.1
   }

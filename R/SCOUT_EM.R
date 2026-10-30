@@ -4,7 +4,8 @@
 e_step <- function(X, phy, edges, paras, defaults, diagnose=TRUE){
     #V <- quickVCV(phy, paras$alpha, paras$sigma, defaults$scaleHeight)
     if (defaults$weight_type == 'alt'){
-      V <- compute_VCV(defaults$parsed_alt_tree, paras$alpha, paras$sigma, add.root=defaults$add.root) # stop gap will fix. 
+      V <- if (defaults$model == 'EB') compute_VCV_EB(defaults$parsed_alt_tree, paras$beta, paras$sigma) else
+        compute_VCV(defaults$parsed_alt_tree, paras$alpha, paras$sigma, add.root=defaults$add.root)
     } else {
       V <- varcov.ou(phy, edges, paras$alpha, paras$sigma, defaults$root.state, defaults$scaleHeight, defaults$assume.station)
     }
@@ -59,7 +60,8 @@ e_step <- function(X, phy, edges, paras, defaults, diagnose=TRUE){
     }
 
     if (defaults$weight_type == 'alt'){
-        W_ <- compute_W_matrix(defaults$parsed_alt_tree, paras$alpha, add.root=defaults$add.root )
+        W_ <- if (defaults$model == 'EB') compute_W_EB(defaults$parsed_alt_tree) else
+          compute_W_matrix(defaults$parsed_alt_tree, paras$alpha, add.root=defaults$add.root )
     } else {
       W_ <- weight.mat(phy, edges, paras$alpha, defaults$root.state, assume.station=defaults$assume.station)
     }
@@ -115,9 +117,70 @@ loglik_OU_inverse <- function(X, W, V){
   return(logl)
 }
 
+# EARLY BURST (EB): beta is signed, unlike OU alpha and the positive parameters.
+# Keep this optimizer separate so BM1/OU parameterization and priors are untouched.
+m_step_EB <- function(Z, X, params_init, phy, defaults, lambda1) {
+  H <- max(defaults$parsed_alt_tree$leaf_dists)
+  # mvMORPH's default minimum rate is 1e-5 at the tree height.
+  beta_min <- log(1e-5) / H
+  has_tau <- !defaults$skipTau
+  lower <- c(beta_min, log(0.01), log(1e-10), if (has_tau) log(0.05))
+  upper <- c(0, log(100), log(1000), if (has_tau) log(2))
+  x0 <- c(params_init$beta, log(params_init$sigma), log(params_init$theta),
+          if (has_tau) log(params_init$tau))
+  x0 <- check_bounds(x0, lower, upper, verbose = defaults$verbose)
+  W <- compute_W_EB(defaults$parsed_alt_tree)
+  expected <- function(theta) {
+    mu <- W %*% theta
+    rownames(mu) <- phy$tip.label
+    mu
+  }
+  loglik <- function(par) {
+    beta <- par[1]
+    sigma <- exp(par[2])
+    theta <- exp(par[3])
+    tau <- if (has_tau) exp(par[4]) else 0
+    if (defaults$algorithm == 'three.point') {
+      tr <- transformPhy_EB(phy, beta, sigma)
+      if (has_tau) {
+        tips <- tr$tree$edge[, 2] <= length(phy$tip.label)
+        tr$tree$edge.length[tips] <- tr$tree$edge.length[tips] + tau^2
+      }
+      ll <- loglik_OU_threepoint(Z, list(tr, expected(theta), length(Z)))
+    } else {
+      V <- compute_VCV_EB(defaults$parsed_alt_tree, beta, sigma)
+      if (has_tau) diag(V) <- diag(V) + tau^2
+      ll <- loglik_OU_inverse(Z, W, V)
+    }
+    list(ll = as.numeric(ll), tau = tau)
+  }
+  objective <- function(par) {
+    val <- loglik(par)
+    # EB has no OU alpha/Gamma prior; retain the existing tau regularization.
+    -(val$ll + length(X) * lambda1 *
+      dnorm(val$tau, mean = sd(X) * defaults$tau_prior_mean,
+            sd = defaults$tau_prior_sd, log = TRUE))
+  }
+  fit <- tryCatch(nloptr(x0 = x0, eval_f = objective,
+                         opts = list(algorithm = 'NLOPT_LN_SBPLX', maxeval = 200,
+                                     ftol_rel = 1e-8, ftol_abs = 1e-10),
+                         lb = lower, ub = upper), error = function(e) NULL)
+  if (is.null(fit)) {
+    if (defaults$verbose) warning('EB optimization failed; retaining initial parameters.')
+    sol <- x0
+  } else {
+    sol <- fit$solution
+  }
+  val <- loglik(sol)
+  list(beta = sol[1], sigma = exp(sol[2]), theta = exp(sol[3]),
+       tau = val$tau, ll_ou = val$ll, ll_total = val$ll,
+       objective = -objective(sol))
+}
+
 #### DRAFT of Joint M-step! ####
 # M-step for (phi, alpha, sigma, theta)
 m_step_tipfog <- function(Z, X, params_init, phy, edges, defaults, lambda1, lambda2) {
+  if (defaults$model == 'EB') return(m_step_EB(Z, X, params_init, phy, defaults, lambda1))
 
   objective <- function(params_latent) {
       par <- exp(params_latent)    
@@ -419,6 +482,8 @@ run_em <- function(phy, X, params_init, edges, defaults,
     ll_noise = numeric(),
     sigma = numeric(),
     alpha = numeric(),
+    beta = numeric(),
+    beta_H = numeric(),
     tau = numeric()
   )
   monitor_history <- NULL
@@ -449,6 +514,8 @@ run_em <- function(phy, X, params_init, edges, defaults,
           
     if (defaults$model == 'BM1'){
         pset <- c("sigma", "theta", "tau")
+    } else if (defaults$model == 'EB') {
+        pset <- c('beta', 'sigma', 'theta', 'tau')
     } else {
         pset <- c("alpha", "sigma", "theta", "tau")
     }
@@ -458,7 +525,11 @@ run_em <- function(phy, X, params_init, edges, defaults,
     }
 
     m_step1_result <- m_step_tipfog(e_result$E_Z, X, params[pset], phy, edges, defaults, lambda1, lambda2)
-    params$alpha <- m_step1_result$alpha
+    if (defaults$model == 'EB') {
+      params$beta <- m_step1_result$beta
+    } else {
+      params$alpha <- m_step1_result$alpha
+    }
     params$sigma <- m_step1_result$sigma
     params$theta <- m_step1_result$theta 
     params$tau <- m_step1_result$tau  
@@ -480,13 +551,19 @@ run_em <- function(phy, X, params_init, edges, defaults,
       ll_total = ll_total,
       objective = m_step1_result$objective, 
       sigma = params$sigma,
-      alpha = params$alpha,
+      alpha = if (defaults$model == 'EB') NA_real_ else params$alpha,
+      beta = if (defaults$model == 'EB') params$beta else NA_real_,
+      beta_H = if (defaults$model == 'EB') params$beta * max(defaults$parsed_alt_tree$leaf_dists) else NA_real_,
       tau = params$tau #,
     ))
     
         # Print progress
     if (verbose) {
-      cat(sprintf("\nIter %3d | LL_total = %10.2f | sigma = %.6f | alpha = %.6f || tau = %.6f\n", iter, ll_total, params$sigma, params$alpha,params$tau))
+      if (defaults$model == 'EB') {
+        cat(sprintf("\nIter %3d | LL_total = %10.2f | sigma = %.6f | beta = %.6f || tau = %.6f\n", iter, ll_total, params$sigma, params$beta, params$tau))
+      } else {
+        cat(sprintf("\nIter %3d | LL_total = %10.2f | sigma = %.6f | alpha = %.6f || tau = %.6f\n", iter, ll_total, params$sigma, params$alpha, params$tau))
+      }
       cat(paste0(state_names, ': ', round(params$theta, 3) ), '\n')
       flush.console()
     }
