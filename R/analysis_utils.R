@@ -15,6 +15,10 @@ extract_history_grid_search <- function(results_list, full.history=FALSE){
         if (unique(history$model) == 'BM1'){
             history$param.count <- history$param.count - 1
         }
+        # SM keeps tau = 0 in paras for reporting, but does not estimate it.
+        if (isTRUE(x$defaults$skipTau)){
+            history$param.count <- history$param.count - 1L
+        }
         return(history)
     }))
     return(dataset1)

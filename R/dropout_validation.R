@@ -409,6 +409,9 @@ fit_aic <- function(res, ntips) {
     if (identical(res$defaults$model, 'BM1')) {
         k <- k - 1
     }
+    if (isTRUE(res$defaults$skipTau)) {
+        k <- k - 1L
+    }
     if (length(ll) != 1 || !is.finite(ll)) {
         return(list(ll = NA_real_, k = k, aic = NA_real_, aicc = NA_real_))
     }
