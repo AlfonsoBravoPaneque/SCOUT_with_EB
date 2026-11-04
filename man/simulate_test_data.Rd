@@ -19,7 +19,9 @@ simulate_test_data(
   param_mode = "rank",
   signal_gain = c(NA, NA, 0.3),
   burst_scale = 1,
-  scale_s = 10
+  scale_s = 10,
+  support_clip = TRUE,
+  beta = NULL
 )
 }
 \arguments{
@@ -50,6 +52,16 @@ simulate_test_data(
 \item{burst_scale}{Integer: Default = 1. Controls level of transcriptional bursting.}
 
 \item{scale_s}{Integer: Default = 10. Controls the rate of synthesis.}
+
+\item{support_clip}{Logical: clamp affine-mapped kinetic parameters to the rank path's own
+support (range of match_param_den[[i]]$x). Inert when param_mode = 'rank'. Bounds a single
+gene-cell count at 10^4.043 * scale_s; without it the affine map is unbounded.}
+
+\item{beta}{Optional non-positive EB rate parameter (one or more values). When supplied,
+also simulate EB genes for every combination of `beta` and `s`, using the same tree
+and the fixed-root EB covariance used in fitting. `s` is the instantaneous variance
+rate at the root; `t0` is the ancestral mean. Requires branch lengths on the tree.
+EB output is returned under `simulated_EB` and written to separate CSV files.}
 }
 \value{
 List of results. The same set are also saved to outdir.

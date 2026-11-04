@@ -95,7 +95,32 @@ SCOUT has three available versions. SCOUT-EM is an expectation-maximization appr
     - tau_prior_sd and tau_prior_mean | [0, 1] control on the tau prior for the EM model. Recommended < 0.4.
     - fixed.root | whether the root is estimated or 'absorbed' into the initial regime (not estimated). Default is fixed.
     - lambda1 and lambda2 | [0,1] how much weight to place on the priors. Both should be non-zero for best performance. Both default to 0.2.
-      
+
+### Simulating Early Burst data
+
+Pass `beta` to `simulate_test_data()` to generate EB expression and counts in addition to
+the existing BM/OU simulations. `beta <= 0` is measured per unit of branch length;
+`beta = 0` gives the Brownian limit. The tree must have branch lengths.
+
+```r
+P <- matrix(c(0.90, 0.08, 0.02,
+              0.10, 0.80, 0.10,
+              0.02, 0.08, 0.90), 3, 3, byrow = TRUE)
+phy <- SCOUT::simulate_tree_states(P, ncells = 64, seed = 1)
+dir.create('sim', showWarnings = FALSE)
+set.seed(1)
+sim <- SCOUT::simulate_test_data(ngenes = 100, ncells = 64, tree = phy,
+    outdir = 'sim', out_prefix = 'example', a = 1, s = 1, t0 = 5,
+    theta_step = 2, beta = -1, sim_lin = FALSE)
+ape::write.tree(phy, 'sim/example.nwk')
+eb_counts <- sim$simulated_EB$counts[[1]]  # EB_1...EB_100, species
+```
+
+The separate `*_EB_counts.csv` and `*_EB_evfs.csv` contain observed count simulations
+and latent expression, respectively. The EB latent draws use the same fixed-root covariance
+as the fitted model; converting them to counts adds measurement noise, so recovery of
+`beta` from counts should be assessed separately. Neither output simulates SMART-seq reads.
+
 ```r
 # Minimal example for SCOUT-EM
 scout.res <- SCOUT(counts.file = <path to counts file>,

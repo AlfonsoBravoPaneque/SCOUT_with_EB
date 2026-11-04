@@ -170,6 +170,40 @@ simulate_OU_genes <- function(tree_, metadata, a, s, t0, theta_step, nstates, ne
     return(list(counts = counts_df, evfs = ou_evf_df))
 }
 
+simulate_EB_EVFs <- function(tree_, beta, s, t0, nevfs) {
+    if (is.null(tree_$edge.length) || length(tree_$edge.length) != nrow(tree_$edge) ||
+        any(!is.finite(tree_$edge.length)) || any(tree_$edge.length < 0)) {
+        stop('EB simulation requires a tree with finite, non-negative branch lengths.')
+    }
+    transformed <- transformPhy_EB(tree_, beta, s)$tree
+    V <- unname(ape::vcv(transformed))
+    ncells <- length(tree_$tip.label)
+    decomp <- eigen(V, symmetric = TRUE)
+    if (any(decomp$values < -1e-8 * max(1, max(decomp$values)))) {
+        stop('EB covariance is not positive semidefinite.')
+    }
+    root <- sweep(decomp$vectors, 2, sqrt(pmax(decomp$values, 0)), '*')
+    matrix(t0, ncells, nevfs) + root %*% matrix(stats::rnorm(ncells * nevfs), ncells, nevfs)
+}
+
+# Each of the three matrices is an independent draw for the count kinetic parameters.
+simulate_EB_genes <- function(tree_, beta, s, t0, nevfs, ngenes, ncells,
+    param_mode='rank', signal_gain=c(NA,NA,0.3), burst_scale=1, scale_s=10, support_clip=TRUE) {
+    eevfs <- list(lapply(seq_len(3), function(i) {
+        simulate_EB_EVFs(tree_, beta, s, t0, nevfs)
+    }))
+    res <- generate_EvoCounts(ncells, NULL, eevfs, nevfs, ngenes,
+                              param_mode, signal_gain, burst_scale, scale_s, support_clip)
+    counts_df <- as.data.frame(t(res[[1]]))
+    colnames(counts_df) <- paste0('EB_', seq_len(ngenes))
+    counts_df$species <- tree_$tip.label
+
+    evf_df <- as.data.frame(do.call(cbind, eevfs[[1]]))
+    colnames(evf_df) <- paste0('EB_', seq_len(3 * nevfs))
+    evf_df$species <- tree_$tip.label
+    list(counts = counts_df, evfs = evf_df)
+}
+
 
 #' Calculate fit metrics and weights from model summaries
 #' @param ngenes Integer describing number of genes to simuate for the tedsim pipeline. 
@@ -189,10 +223,20 @@ simulate_OU_genes <- function(tree_, metadata, a, s, t0, theta_step, nstates, ne
 #' @param signal_gain List: Default c(NA,NA,0.3). Controls the how much to scale the variance of an OU process before converting to counts. 
 #' @param burst_scale Integer: Default = 1. Controls level of transcriptional bursting. 
 #' @param scale_s Integer: Default = 10. Controls the rate of synthesis. 
+#' @param beta Optional non-positive EB rate parameter (one or more values). When supplied,
+#'   also simulate EB genes for every combination of `beta` and `s`, using the same tree
+#'   and the fixed-root EB covariance used in fitting. `s` is the instantaneous variance
+#'   rate at the root; `t0` is the ancestral mean. Requires branch lengths on the tree.
+#'   EB output is returned under `simulated_EB` and written to separate CSV files.
 #' @return List of results. The same set are also saved to outdir. 
 #' @export
 simulate_test_data <- function(ngenes, ncells, tree, outdir, out_prefix, a, s, t0, theta_step, nevfs = 20, sim_lin=TRUE, 
-    param_mode='rank', signal_gain=c(NA,NA,0.3), burst_scale=1, scale_s=10, support_clip=TRUE) {
+    param_mode='rank', signal_gain=c(NA,NA,0.3), burst_scale=1, scale_s=10, support_clip=TRUE,
+    beta=NULL) {
+    if (!is.null(beta) && (!is.numeric(beta) || !length(beta) ||
+                           any(!is.finite(beta)) || any(beta > 0))) {
+        stop('`beta` must contain finite values <= 0 for EB simulation.')
+    }
     if (sim_lin){
         log_message(sprintf('Generating scLT data for %d cells.', ncells), verbose =TRUE)
         log_message(sprintf('Files will be saved to %s.', outdir), verbose =TRUE)
@@ -253,9 +297,24 @@ simulate_test_data <- function(ngenes, ncells, tree, outdir, out_prefix, a, s, t
         write.csv(OU_sim$evfs, paste0(outdir, '/', out_prefix,'_alpha_', a_i, '_sigma_', s_i, '_OUEVF_evf_counts.csv'))
 	 }
 
+	 result <- list('scLT' = test_dataset, 'simulated_OU' = simulated_res)
+     if (!is.null(beta)) {
+         eb_res <- list(counts = list(), evfs = list())
+         for (beta_i in beta) for (s_i in s) {
+             eb <- simulate_EB_genes(tree_, beta_i, s_i, t0, nevfs, ngenes, ncells,
+                                     param_mode, signal_gain, burst_scale, scale_s, support_clip)
+             key <- paste0('b', beta_i, '_s', s_i)
+             eb_res$counts[[key]] <- eb$counts
+             eb_res$evfs[[key]] <- eb$evfs
+             write.csv(eb$counts, file.path(outdir, paste0(out_prefix, '_beta_', beta_i,
+                                                           '_sigma_', s_i, '_EB_counts.csv')))
+             write.csv(eb$evfs, file.path(outdir, paste0(out_prefix, '_beta_', beta_i,
+                                                         '_sigma_', s_i, '_EB_evfs.csv')))
+         }
+         result$simulated_EB <- eb_res
+     }
 	 log_message('Data generation complete', verbose =TRUE)
-
-	return(list('scLT' = test_dataset, 'simulated_OU' = simulated_res)) 
+	return(result)
 
 }
 
