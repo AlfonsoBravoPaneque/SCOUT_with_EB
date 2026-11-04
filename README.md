@@ -103,17 +103,30 @@ the existing BM/OU simulations. `beta <= 0` is measured per unit of branch lengt
 `beta = 0` gives the Brownian limit. The tree must have branch lengths.
 
 ```r
+library(dplyr)
 P <- matrix(c(0.90, 0.08, 0.02,
               0.10, 0.80, 0.10,
               0.02, 0.08, 0.90), 3, 3, byrow = TRUE)
+
 phy <- SCOUT::simulate_tree_states(P, ncells = 64, seed = 1)
-dir.create('sim', showWarnings = FALSE)
+
 set.seed(1)
+
 sim <- SCOUT::simulate_test_data(ngenes = 100, ncells = 64, tree = phy,
-    outdir = 'sim', out_prefix = 'example', a = 1, s = 1, t0 = 5,
-    theta_step = 2, beta = -1, sim_lin = FALSE)
-ape::write.tree(phy, 'sim/example.nwk')
-eb_counts <- sim$simulated_EB$counts[[1]]  # EB_1...EB_100, species
+                                 outdir = 'simulation_all_models', out_prefix = 'all_models', a = 1, s = 1, t0 = 5,
+                                 theta_step = 2, beta = -1, sim_lin = FALSE)
+
+ape::write.tree(phy, 'simulation_all_models/simulation_tree.nwk')
+
+eb_counts <- sim$simulated_EB$counts[[1]]  # EB_1...EB_100...species
+
+ou_counts <- sim$simulated_OU$counts[[1]]  # BM_1 ...OU1_1...OUM...species
+identical(eb_counts$species, ou_counts$species) # TRUE
+ou_counts_filt <- ou_counts %>% select(-c(species))
+
+matrix <- cbind(ou_counts_filt, eb_counts)
+
+write.csv(matrix, file = "simulation_all_models/all_models_simulated_alpha_1_sigma_1_beta_-1.csv", row.names = T)
 ```
 
 The separate `*_EB_counts.csv` and `*_EB_evfs.csv` contain observed count simulations
