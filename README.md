@@ -132,7 +132,7 @@ write.csv(matrix, file = "simulation_all_models/all_models_simulated_alpha_1_sig
 The separate `*_EB_counts.csv` and `*_EB_evfs.csv` contain observed count simulations
 and latent expression, respectively. The EB latent draws use the same fixed-root covariance
 as the fitted model; converting them to counts adds measurement noise, so recovery of
-`beta` from counts should be assessed separately. Neither output simulates SMART-seq reads.
+`beta` from counts should be assessed separately.
 
 ```r
 # Minimal example for SCOUT-EM
