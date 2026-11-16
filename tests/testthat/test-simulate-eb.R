@@ -10,6 +10,32 @@ test_that('EB latent draws follow the fitting covariance, including the BM limit
     }
 })
 
+test_that('EB uses the branchwise simulator and retains the eigen sampler as reference', {
+    phy <- ape::read.tree(text = '((a:1,b:1):1,(c:1,d:1):1);')
+    set.seed(71)
+    branchwise <- SCOUT:::simulate_EB_EVFs_branchwise(phy, -0.75, 0.75, 5, 10)
+    set.seed(71)
+    expect_identical(SCOUT:::simulate_EB_EVFs(phy, -0.75, 0.75, 5, 10), branchwise)
+    set.seed(71)
+    reference <- SCOUT:::simulate_EB_EVFs_covariance(phy, -0.75, 0.75, 5, 10)
+    expect_identical(dim(reference), dim(branchwise))
+    expect_true(all(is.finite(branchwise)))
+    expect_false(identical(reference, branchwise)) # same distribution, not same draw
+})
+
+test_that('EB factor generator matches the three matrices used for kinetic parameters', {
+    phy <- ape::read.tree(text = '((a:1,b:1):1,(c:1,d:1):1);')
+    set.seed(17)
+    factors <- SCOUT:::generate_EB_EVFs(phy, -0.75, 0.75, 5, 3)
+    expect_length(factors, 3)
+    expect_true(all(vapply(factors, function(x) identical(dim(x), c(4L, 3L)), logical(1))))
+    set.seed(17)
+    reference <- lapply(seq_len(3), function(i) {
+        SCOUT:::simulate_EB_EVFs(phy, -0.75, 0.75, 5, 3)
+    })
+    expect_identical(factors, reference)
+})
+
 test_that('EB simulation retains OU output and produces aligned counts and latent values', {
     phy <- ape::read.tree(text = '((a:1,b:1):1,(c:1,d:1):1);')
     phy$states <- c('A', 'A', 'B', 'B')

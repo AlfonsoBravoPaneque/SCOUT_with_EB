@@ -170,7 +170,8 @@ simulate_OU_genes <- function(tree_, metadata, a, s, t0, theta_step, nstates, ne
     return(list(counts = counts_df, evfs = ou_evf_df))
 }
 
-simulate_EB_EVFs <- function(tree_, beta, s, t0, nevfs) {
+# Reference covariance/eigen sampler kept for independent validation.
+simulate_EB_EVFs_covariance <- function(tree_, beta, s, t0, nevfs) {
     if (is.null(tree_$edge.length) || length(tree_$edge.length) != nrow(tree_$edge) ||
         any(!is.finite(tree_$edge.length)) || any(tree_$edge.length < 0)) {
         stop('EB simulation requires a tree with finite, non-negative branch lengths.')
@@ -186,12 +187,60 @@ simulate_EB_EVFs <- function(tree_, beta, s, t0, nevfs) {
     matrix(t0, ncells, nevfs) + root %*% matrix(stats::rnorm(ncells * nevfs), ncells, nevfs)
 }
 
-# Each of the three matrices is an independent draw for the count kinetic parameters.
+# Exact EB transition on each branch, analogous to OUwie.sim.edited's traversal.
+# Independent normal increments produce the same fixed-root covariance as
+# simulate_EB_EVFs_covariance() but not the same individual random realization.
+simulate_EB_EVFs_branchwise <- function(tree_, beta, s, t0, nevfs) {
+    if (is.null(tree_$edge.length) || length(tree_$edge.length) != nrow(tree_$edge) ||
+        any(!is.finite(tree_$edge.length)) || any(tree_$edge.length < 0)) {
+        stop('EB simulation requires a tree with finite, non-negative branch lengths.')
+    }
+    if (length(beta) != 1L || !is.finite(beta) || beta > 0 ||
+        length(s) != 1L || !is.finite(s) || s <= 0 ||
+        length(t0) != 1L || !is.finite(t0) ||
+        length(nevfs) != 1L || !is.finite(nevfs) || nevfs < 1 || nevfs != as.integer(nevfs)) {
+        stop('EB requires beta <= 0, s > 0, finite t0 and positive integer nevfs.')
+    }
+    phy <- ape::reorder.phylo(tree_, 'cladewise')
+    n <- length(phy$tip.label)
+    depths <- ape::node.depth.edgelength(phy)
+    H <- max(depths[seq_len(n)])
+    if (!is.finite(H) || H <= 0) stop('EB requires a positive tree height.')
+    root <- n + 1L
+    x <- matrix(NA_real_, n + phy$Nnode, nevfs)
+    x[root, ] <- t0
+    for (i in seq_len(nrow(phy$edge))) {
+        anc <- phy$edge[i, 1]
+        desc <- phy$edge[i, 2]
+        dt <- phy$edge.length[i]
+        start <- depths[anc]
+        var <- if (abs(beta) * H < 1e-8) {
+            s * exp(beta * start) * dt * (1 + beta * dt / 2)
+        } else {
+            s * exp(beta * start) * expm1(beta * dt) / beta
+        }
+        x[desc, ] <- x[anc, ] + sqrt(max(0, var)) * stats::rnorm(nevfs)
+    }
+    x[seq_len(n), , drop = FALSE]
+}
+
+# Main EB simulator: branchwise exact transition, like the OUwie traversal.
+simulate_EB_EVFs <- function(tree_, beta, s, t0, nevfs) {
+    simulate_EB_EVFs_branchwise(tree_, beta, s, t0, nevfs)
+}
+
+# As in generate_EvoEVFs(), make three independent factor matrices: one each
+# for kon, koff and s in generate_EvoCounts(). This is one model's entry in
+# the outer model list expected by that function.
+generate_EB_EVFs <- function(tree_, beta, s, t0, nevfs) {
+    lapply(seq_len(3), function(i) {
+        simulate_EB_EVFs(tree_, beta, s, t0, nevfs)
+    })
+}
+
 simulate_EB_genes <- function(tree_, beta, s, t0, nevfs, ngenes, ncells,
     param_mode='rank', signal_gain=c(NA,NA,0.3), burst_scale=1, scale_s=10, support_clip=TRUE) {
-    eevfs <- list(lapply(seq_len(3), function(i) {
-        simulate_EB_EVFs(tree_, beta, s, t0, nevfs)
-    }))
+    eevfs <- list(generate_EB_EVFs(tree_, beta, s, t0, nevfs))
     res <- generate_EvoCounts(ncells, NULL, eevfs, nevfs, ngenes,
                               param_mode, signal_gain, burst_scale, scale_s, support_clip)
     counts_df <- as.data.frame(t(res[[1]]))
